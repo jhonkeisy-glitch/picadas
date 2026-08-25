@@ -837,6 +837,7 @@ async function hacerLogin() {
     actualizarLabel();
     renderAll();
     await mostrarSplash();
+    guardarEnNube(); // sube lo que haya local (por si la nube estaba vacía, como en la primera sincronización)
   } catch (e) {
     console.error('Error en login:', e);
     errEl.textContent = 'Error: ' + (e.code || e.message || e);
@@ -2455,6 +2456,7 @@ async function initApp() {
     document.getElementById('user-bar-nombre').textContent = usuarioActual;
     if (usuarioId) await cargarDesdeNube(); // trae lo cargado desde otros dispositivos
     mostrarSplash();
+    guardarEnNube(); // sube lo que haya local (por si la nube estaba vacía, como en la primera sincronización)
     // Refrescar nombre, preferencia de ranking y permisos de admin por si se cambiaron desde otro dispositivo
     if (usuarioId) {
       db.collection('usuarios').doc(usuarioId).get().then(doc => {
