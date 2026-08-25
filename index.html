@@ -759,6 +759,41 @@ function fechaHoyStr() {
   return h.getFullYear() + '-' + String(h.getMonth()+1).padStart(2,'0') + '-' + String(h.getDate()).padStart(2,'0');
 }
 
+// ══════════════════════════════════════════════════════════════════
+// SINCRONIZACIÓN EN LA NUBE (para que los datos viajen entre dispositivos)
+//   Espeja todas las claves de localStorage de este usuario (las que
+//   empiezan con "th_<usuarioId>_", o sea: días cargados, config,
+//   reglas de descuento, fecha de inicio, días del período, etc.)
+//   en un único documento de Firestore, para que al entrar con el
+//   mismo usuario desde otro teléfono/PC se descargue todo.
+// ══════════════════════════════════════════════════════════════════
+let nubeSyncTimer = null;
+function guardarEnNubeDebounced() {
+  if (!usuarioId) return;
+  clearTimeout(nubeSyncTimer);
+  nubeSyncTimer = setTimeout(guardarEnNube, 700);
+}
+async function guardarEnNube() {
+  if (!usuarioId) return;
+  try {
+    const prefijo = 'th_' + usuarioId + '_';
+    const datos = {};
+    for (let key in localStorage) {
+      if (key.startsWith(prefijo)) datos[key] = localStorage.getItem(key);
+    }
+    await db.collection('registros').doc(usuarioId).set({ datos, actualizado: Date.now() });
+  } catch (e) { console.error('Error al guardar en la nube:', e); }
+}
+async function cargarDesdeNube() {
+  if (!usuarioId) return;
+  try {
+    const doc = await db.collection('registros').doc(usuarioId).get();
+    if (!doc.exists) return;
+    const datos = doc.data().datos || {};
+    Object.keys(datos).forEach(key => localStorage.setItem(key, datos[key]));
+  } catch (e) { console.error('Error al cargar desde la nube:', e); }
+}
+
 // ─── SESIÓN ACTUAL ───
 // usuarioId: identificador FIJO de login (nunca cambia, es el "usuario" con el que se creó la cuenta).
 // usuarioActual: NOMBRE PARA MOSTRAR (puede cambiarlo el propio usuario, ver "Mi cuenta").
@@ -797,6 +832,10 @@ async function hacerLogin() {
     document.getElementById('user-bar').style.display = 'flex';
     document.getElementById('user-bar-nombre').textContent = usuarioActual;
     document.getElementById('btn-panel-admin').style.display = esAdminActual ? 'inline-block' : 'none';
+    await cargarDesdeNube();
+    cargarConfig();
+    actualizarLabel();
+    renderAll();
     await mostrarSplash();
   } catch (e) {
     console.error('Error en login:', e);
@@ -1321,14 +1360,14 @@ const kDias    = () => 'th_' + pfx() + 'dias_'    + mesActual;
 const kPicBase = (idx) => 'th_' + pfx() + 'picbase_' + mesActual + '_' + idx;
 
 function getPicBase(idx) { return parseInt(localStorage.getItem(kPicBase(idx)) || '1600'); }
-function setPicBase(idx, val) { localStorage.setItem(kPicBase(idx), val); }
+function setPicBase(idx, val) { localStorage.setItem(kPicBase(idx), val); guardarEnNubeDebounced(); }
 const kDescuento = (idx) => 'th_' + pfx() + 'desc_' + mesActual + '_' + idx;
 function getDescuento(idx) { return localStorage.getItem(kDescuento(idx)) === 'on'; }
-function setDescuento(idx, val) { localStorage.setItem(kDescuento(idx), val ? 'on' : 'off'); }
+function setDescuento(idx, val) { localStorage.setItem(kDescuento(idx), val ? 'on' : 'off'); guardarEnNubeDebounced(); }
 
 // ─── DATOS ───
 function getDatos()    { return JSON.parse(localStorage.getItem(kDatos())  || '[]'); }
-function setDatos(d)   { localStorage.setItem(kDatos(), JSON.stringify(d)); sincronizarExtraUsuarioMes(); }
+function setDatos(d)   { localStorage.setItem(kDatos(), JSON.stringify(d)); sincronizarExtraUsuarioMes(); guardarEnNubeDebounced(); }
 function getDatosMes(mes) { return JSON.parse(localStorage.getItem('th_' + pfx() + 'datos_' + mes) || '[]'); }
 
 // ─── DESCUENTOS ENTRE MESES ───
@@ -1343,7 +1382,7 @@ function getReglasDescuento() {
   if (limpias.length !== raw.length) guardarReglasDescuento(limpias); // auto-limpia reglas con mes inválido (bug del picker nativo)
   return limpias;
 }
-function guardarReglasDescuento(reglas){ localStorage.setItem(kReglasDescuento(), JSON.stringify(reglas)); }
+function guardarReglasDescuento(reglas){ localStorage.setItem(kReglasDescuento(), JSON.stringify(reglas)); guardarEnNubeDebounced(); }
 
 function calcularExtrasHorasMes(mes) {
   const datos = getDatosMes(mes);
@@ -1382,11 +1421,11 @@ function getFechaInicio() {
   const [y, m] = mesActual.split('-').map(Number);
   return new Date(y, m - 1, 1);
 }
-function setFechaInicio(f) { localStorage.setItem(kInicio(), fmtDate(f)); }
+function setFechaInicio(f) { localStorage.setItem(kInicio(), fmtDate(f)); guardarEnNubeDebounced(); }
 
 // ─── DÍAS DEL PERÍODO ───
 function getDias() { return parseInt(localStorage.getItem(kDias()) || '30'); }
-function setDias(n) { localStorage.setItem(kDias(), n); }
+function setDias(n) { localStorage.setItem(kDias(), n); guardarEnNubeDebounced(); }
 
 // ─── TODAS LAS FECHAS DEL PERÍODO ───
 function getFechas() {
@@ -1411,7 +1450,7 @@ function getConfig() {
     segsocial: parseFloat(document.getElementById('cfg-segsocial').value) || 6.35,
   };
 }
-function guardarConfig() { localStorage.setItem('th_' + pfx() + 'config', JSON.stringify(getConfig())); }
+function guardarConfig() { localStorage.setItem('th_' + pfx() + 'config', JSON.stringify(getConfig())); guardarEnNubeDebounced(); }
 function cargarConfig() {
   const c = JSON.parse(localStorage.getItem('th_' + pfx() + 'config') || 'null');
   if (!c) return;
@@ -2408,35 +2447,39 @@ function mostrarSugsUsuario(input, panel) {
 const hoyInit = new Date();
 mesActual = hoyInit.getFullYear() + '-' + String(hoyInit.getMonth()+1).padStart(2,'0');
 
-if (usuarioActual) {
-  // Ya había una sesión guardada en este teléfono: entramos directo
-  document.getElementById('login-bg').style.display = 'none';
-  document.getElementById('user-bar').style.display = 'flex';
-  document.getElementById('user-bar-nombre').textContent = usuarioActual;
-  mostrarSplash();
-  // Refrescar nombre, preferencia de ranking y permisos de admin por si se cambiaron desde otro dispositivo
-  if (usuarioId) {
-    db.collection('usuarios').doc(usuarioId).get().then(doc => {
-      if (!doc.exists) return;
-      const data = doc.data();
-      publicarEnRanking = data.publicarRanking !== false;
-      esAdminActual = data.esAdmin === true;
-      document.getElementById('btn-panel-admin').style.display = esAdminActual ? 'inline-block' : 'none';
-      if (data.nombre && data.nombre !== usuarioActual) {
-        usuarioActual = data.nombre;
-        localStorage.setItem('th_sesion_usuario', usuarioActual);
-        document.getElementById('user-bar-nombre').textContent = usuarioActual;
-      }
-    }).catch(() => {});
+async function initApp() {
+  if (usuarioActual) {
+    // Ya había una sesión guardada en este teléfono: entramos directo
+    document.getElementById('login-bg').style.display = 'none';
+    document.getElementById('user-bar').style.display = 'flex';
+    document.getElementById('user-bar-nombre').textContent = usuarioActual;
+    if (usuarioId) await cargarDesdeNube(); // trae lo cargado desde otros dispositivos
+    mostrarSplash();
+    // Refrescar nombre, preferencia de ranking y permisos de admin por si se cambiaron desde otro dispositivo
+    if (usuarioId) {
+      db.collection('usuarios').doc(usuarioId).get().then(doc => {
+        if (!doc.exists) return;
+        const data = doc.data();
+        publicarEnRanking = data.publicarRanking !== false;
+        esAdminActual = data.esAdmin === true;
+        document.getElementById('btn-panel-admin').style.display = esAdminActual ? 'inline-block' : 'none';
+        if (data.nombre && data.nombre !== usuarioActual) {
+          usuarioActual = data.nombre;
+          localStorage.setItem('th_sesion_usuario', usuarioActual);
+          document.getElementById('user-bar-nombre').textContent = usuarioActual;
+        }
+      }).catch(() => {});
+    }
+  } else {
+    document.getElementById('login-bg').style.display = 'flex';
   }
-} else {
-  document.getElementById('login-bg').style.display = 'flex';
-}
 
-cargarConfig();
-actualizarLabel();
-renderAll();
-sincronizarExtraUsuarioMes();
+  cargarConfig();
+  actualizarLabel();
+  renderAll();
+  sincronizarExtraUsuarioMes();
+}
+initApp();
 </script>
 </body>
 </html>
